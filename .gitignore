@@ -1,0 +1,26 @@
+# Dataset and raw archives
+data/
+data_raw/
+
+# Training outputs and checkpoints
+outputs/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+
+# Python cache / env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

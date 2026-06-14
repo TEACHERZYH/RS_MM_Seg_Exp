@@ -1,0 +1,60 @@
+experiment:
+  name: qalf_potsdam_rgb_dsm_mobilenetv3_pretrained
+  output_dir: outputs/qalf_potsdam_rgb_dsm_mobilenetv3_pretrained
+  seed: 42
+
+dataset:
+  name: potsdam
+  root_dir: data/Potsdam_prepared_v4
+  image_dir: images
+  aux_dir: dsm
+  mask_dir: masks
+  split_dir: splits
+  image_suffix: .png
+  aux_suffix: .png
+  mask_suffix: .png
+  num_classes: 6
+  input_size: 512
+  train_split: train.txt
+  val_split: val.txt
+  test_split: test.txt
+  missing_prob: 0.3
+  degradation_prob: 0.5
+  normalize_aux: true
+
+model:
+  in_channels_main: 3
+  in_channels_aux: 1
+  base_channels: 32
+  decoder_channels: 128
+  num_classes: 6
+  dropout: 0.1
+  encoder_type: torchvision_mobilenetv3
+  encoder_name: mobilenet_v3_large
+  encoder_pretrained: true
+  aux_encoder_name: mobilenet_v3_large
+  aux_encoder_pretrained: true
+  freeze_main_encoder: false
+  freeze_aux_encoder: false
+
+train:
+  device: cuda
+  epochs: 120
+  batch_size: 4
+  num_workers: 2
+  optimizer: adamw
+  lr: 0.0005
+  weight_decay: 0.0001
+  save_best_only: true
+  amp: false
+
+loss:
+  ce_weight: 1.0
+  dice_weight: 0.5
+  feat_weight: 0.5
+  pred_weight: 0.5
+  boundary_weight: 0.0
+
+eval:
+  batch_size: 4
+  num_workers: 2

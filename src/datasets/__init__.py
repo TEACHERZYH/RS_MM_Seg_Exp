@@ -1,0 +1,1 @@
+from .isprs_dataset import ISPRSMultimodalDataset
