@@ -34,13 +34,13 @@ class SegmentationCriterion(nn.Module):
         self.feat_weight = feat_weight
         self.pred_weight = pred_weight
         self.ce = nn.CrossEntropyLoss(ignore_index=255)
-        self.kl = nn.KLDivLoss(reduction="batchmean")
 
     def forward(
         self,
         student_out: dict,
         teacher_out: dict | None,
         targets: torch.Tensor,
+        distill_weight: float = 1.0,
     ) -> dict[str, torch.Tensor]:
         logits = student_out["logits"]
         loss_ce = self.ce(logits, targets)
@@ -49,19 +49,21 @@ class SegmentationCriterion(nn.Module):
         loss_feat = torch.tensor(0.0, device=logits.device)
         loss_pred = torch.tensor(0.0, device=logits.device)
 
-        if teacher_out is not None:
+        if teacher_out is not None and distill_weight > 0.0:
             for s_feat, t_feat in zip(student_out["fused_features"], teacher_out["fused_features"]):
                 loss_feat = loss_feat + F.mse_loss(s_feat, t_feat.detach())
 
             t_prob = F.softmax(teacher_out["logits"].detach(), dim=1)
             s_log_prob = F.log_softmax(student_out["logits"], dim=1)
-            loss_pred = self.kl(s_log_prob, t_prob)
+            valid = ((targets >= 0) & (targets < self.num_classes)).float()
+            pixel_kl = F.kl_div(s_log_prob, t_prob, reduction="none").sum(dim=1)
+            loss_pred = (pixel_kl * valid).sum() / valid.sum().clamp_min(1.0)
 
         total = (
             self.ce_weight * loss_ce
             + self.dice_weight * loss_dice
-            + self.feat_weight * loss_feat
-            + self.pred_weight * loss_pred
+            + distill_weight * self.feat_weight * loss_feat
+            + distill_weight * self.pred_weight * loss_pred
         )
         return {
             "total": total,

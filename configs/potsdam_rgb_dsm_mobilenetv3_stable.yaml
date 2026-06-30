@@ -1,11 +1,11 @@
 experiment:
-  name: qalf_vaihingen_irrg_dsm
-  output_dir: outputs/qalf_vaihingen_irrg_dsm
+  name: qalf_potsdam_rgb_dsm_mobilenetv3_stable
+  output_dir: outputs/qalf_potsdam_rgb_dsm_mobilenetv3_stable
   seed: 42
 
 dataset:
-  name: vaihingen
-  root_dir: data/Vaihingen_prepared_v4
+  name: potsdam
+  root_dir: data/Potsdam_prepared_v4
   image_dir: images
   aux_dir: dsm
   mask_dir: masks
@@ -18,8 +18,8 @@ dataset:
   train_split: train.txt
   val_split: val.txt
   test_split: test.txt
-  missing_prob: 0.3
-  degradation_prob: 0.5
+  missing_prob: 0.0
+  degradation_prob: 0.0
   normalize_aux: true
 
 model:
@@ -29,25 +29,35 @@ model:
   decoder_channels: 128
   num_classes: 6
   dropout: 0.1
+  encoder_type: torchvision_mobilenetv3
+  encoder_name: mobilenet_v3_large
+  encoder_pretrained: true
+  aux_encoder_name: mobilenet_v3_large
+  aux_encoder_pretrained: true
+  freeze_main_encoder: false
+  freeze_aux_encoder: false
 
 train:
   device: cuda
-  epochs: 120
+  epochs: 80
   batch_size: 8
   num_workers: 4
   optimizer: adamw
-  lr: 0.001
+  lr: 0.0003
   weight_decay: 0.0001
+  grad_clip_norm: 1.0
+  distill_start_epoch: 999999
+  ema_decay: 0.99
   save_best_only: true
   amp: false
 
 loss:
   ce_weight: 1.0
   dice_weight: 0.5
-  feat_weight: 0.5
-  pred_weight: 0.5
+  feat_weight: 0.0
+  pred_weight: 0.0
   boundary_weight: 0.0
 
 eval:
-  batch_size: 4
-  num_workers: 2
+  batch_size: 8
+  num_workers: 4

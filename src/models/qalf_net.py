@@ -292,8 +292,21 @@ class QALFNet(nn.Module):
         aux_encoder_pretrained: bool | None = None,
         freeze_main_encoder: bool = False,
         freeze_aux_encoder: bool = False,
+        fusion_mode: str = "dynamic_gated",
     ) -> None:
         super().__init__()
+        supported_fusion_modes = {
+            "dynamic_gated",
+            "quality_weighted",
+            "fixed_average",
+            "main_only",
+            "aux_only",
+            "early_fusion",
+        }
+        if fusion_mode not in supported_fusion_modes:
+            raise ValueError(f"Unsupported fusion_mode: {fusion_mode}")
+        self.fusion_mode = fusion_mode
+
         self.main_encoder = self._build_encoder(
             encoder_type=encoder_type,
             in_channels=in_channels_main,
@@ -325,6 +338,18 @@ class QALFNet(nn.Module):
         if freeze_aux_encoder:
             for param in self.aux_encoder.parameters():
                 param.requires_grad = False
+        if fusion_mode in {"main_only", "early_fusion"}:
+            for module in (self.aux_encoder, self.quality_estimators_main, self.quality_estimators_aux, self.fusions):
+                for param in module.parameters():
+                    param.requires_grad = False
+        if fusion_mode == "aux_only":
+            for module in (self.main_encoder, self.quality_estimators_main, self.quality_estimators_aux, self.fusions):
+                for param in module.parameters():
+                    param.requires_grad = False
+        if fusion_mode == "quality_weighted":
+            for fusion in self.fusions:
+                for param in fusion.gate_conv.parameters():
+                    param.requires_grad = False
 
     @staticmethod
     def _build_encoder(
@@ -349,8 +374,14 @@ class QALFNet(nn.Module):
         image: torch.Tensor,
         aux: torch.Tensor,
         aux_available: torch.Tensor | None = None,
+        main_available: torch.Tensor | None = None,
     ) -> dict[str, torch.Tensor | list[torch.Tensor]]:
-        main_feats = self.main_encoder(image)
+        if self.fusion_mode == "early_fusion":
+            main_input = torch.cat([image, aux], dim=1)
+        else:
+            main_input = image
+
+        main_feats = self.main_encoder(main_input)
         aux_feats = self.aux_encoder(aux)
 
         fused_feats = []
@@ -358,15 +389,59 @@ class QALFNet(nn.Module):
         quality_aux_list = []
         gate_maps = []
 
+        if self.fusion_mode == "main_only" or self.fusion_mode == "early_fusion":
+            logits = self.decoder([self.dropout(feat) for feat in main_feats])
+            logits = F.interpolate(logits, size=image.shape[-2:], mode="bilinear", align_corners=False)
+            return {
+                "logits": logits,
+                "fused_features": main_feats,
+                "quality_main": quality_main_list,
+                "quality_aux": quality_aux_list,
+                "gate_maps": gate_maps,
+            }
+
+        if self.fusion_mode == "aux_only":
+            logits = self.decoder([self.dropout(feat) for feat in aux_feats])
+            logits = F.interpolate(logits, size=image.shape[-2:], mode="bilinear", align_corners=False)
+            return {
+                "logits": logits,
+                "fused_features": aux_feats,
+                "quality_main": quality_main_list,
+                "quality_aux": quality_aux_list,
+                "gate_maps": gate_maps,
+            }
+
         if aux_available is None:
             aux_available = torch.ones(image.size(0), device=image.device)
-
-        main_available = torch.ones_like(aux_available)
+        if main_available is None:
+            main_available = torch.ones_like(aux_available)
 
         for idx, (main_feat, aux_feat) in enumerate(zip(main_feats, aux_feats)):
             q_main = self.quality_estimators_main[idx](main_feat, main_available)
             q_aux = self.quality_estimators_aux[idx](aux_feat, aux_available)
-            fused, gates = self.fusions[idx](main_feat, aux_feat, q_main, q_aux)
+            if self.fusion_mode == "fixed_average":
+                main_proj = self.fusions[idx].main_proj(main_feat)
+                aux_proj = self.fusions[idx].aux_proj(aux_feat)
+                fused = 0.5 * (main_proj + aux_proj)
+                gates = torch.cat([torch.full_like(fused[:, :1], 0.5), torch.full_like(fused[:, :1], 0.5)], dim=1)
+            elif self.fusion_mode == "quality_weighted":
+                main_proj = self.fusions[idx].main_proj(main_feat)
+                aux_proj = self.fusions[idx].aux_proj(aux_feat)
+                gate_main = q_main.view(-1, 1, 1, 1)
+                gate_aux = q_aux.view(-1, 1, 1, 1)
+                normalizer = gate_main + gate_aux + 1e-6
+                gate_main = gate_main / normalizer
+                gate_aux = gate_aux / normalizer
+                fused = gate_main * main_proj + gate_aux * aux_proj
+                gates = torch.cat(
+                    [
+                        gate_main.expand(-1, 1, fused.shape[-2], fused.shape[-1]),
+                        gate_aux.expand(-1, 1, fused.shape[-2], fused.shape[-1]),
+                    ],
+                    dim=1,
+                )
+            else:
+                fused, gates = self.fusions[idx](main_feat, aux_feat, q_main, q_aux)
 
             fused_feats.append(self.dropout(fused))
             quality_main_list.append(q_main)

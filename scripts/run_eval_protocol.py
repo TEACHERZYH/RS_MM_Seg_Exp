@@ -35,7 +35,7 @@ class Scenario:
     degradation_prob: float
     enable_missing: bool
     enable_degradation: bool
-
+    missing_target: str = "aux"
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
@@ -44,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--split", type=str, default="test_split")
     parser.add_argument("--trials", type=int, default=3)
     parser.add_argument("--output-dir", type=str, default="")
+    parser.add_argument("--include-missing-primary", action="store_true")
     return parser.parse_args()
 
 
@@ -59,9 +60,10 @@ def eval_once(
         image = batch["image"].to(device)
         aux = batch["aux"].to(device)
         aux_available = batch["aux_available"].to(device)
+        main_available = batch.get("main_available", torch.ones_like(aux_available)).to(device)
         mask = batch["mask"].to(device)
 
-        out = model(image, aux, aux_available)
+        out = model(image, aux, aux_available, main_available)
         pred = out["logits"].argmax(dim=1).cpu().numpy()
         tgt = mask.cpu().numpy()
         confusion += confusion_matrix_from_predictions(pred, tgt, num_classes)
@@ -96,6 +98,7 @@ def build_dataset(config: dict, split_key: str, scenario: Scenario) -> ISPRSMult
         training=False,
         enable_missing=scenario.enable_missing,
         enable_degradation=scenario.enable_degradation,
+        missing_target=scenario.missing_target,
     )
 
 
@@ -112,10 +115,12 @@ def main() -> None:
 
     scenarios = [
         Scenario("full", 0.0, 0.0, False, False),
-        Scenario("missing_aux", 1.0, 0.0, True, False),
+        Scenario("missing_aux", 1.0, 0.0, True, False, "aux"),
         Scenario("degraded", 0.0, 1.0, False, True),
-        Scenario("missing_aux_and_degraded", 1.0, 1.0, True, True),
+        Scenario("missing_aux_and_degraded", 1.0, 1.0, True, True, "aux"),
     ]
+    if args.include_missing_primary:
+        scenarios.append(Scenario("missing_primary", 1.0, 0.0, True, False, "main"))
 
     output_dir = Path(args.output_dir) if args.output_dir else Path(config["experiment"]["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)

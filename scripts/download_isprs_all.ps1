@@ -1,8 +1,14 @@
 $ErrorActionPreference = "Stop"
 
-$pythonDl = "c:\Users\zyh\miniconda3\envs\dl_env\python.exe"
-$root = "f:\2026\2\RS_MM_Seg_Exp"
-$password = "CjwcipT4-P8g"
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$defaultRoot = Resolve-Path (Join-Path $scriptDir "..")
+$pythonDl = if ($env:PYTHON) { $env:PYTHON } else { "python" }
+$root = if ($env:PROJECT_DIR) { $env:PROJECT_DIR } else { $defaultRoot.Path }
+$password = $env:ISPRS_SHARE_PASSWORD
+
+if (-not $password) {
+  throw "Set ISPRS_SHARE_PASSWORD before downloading password-protected ISPRS archives."
+}
 
 Set-Location $root
 

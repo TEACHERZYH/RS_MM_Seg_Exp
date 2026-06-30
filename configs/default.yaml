@@ -5,7 +5,7 @@ experiment:
 
 dataset:
   name: vaihingen
-  root_dir: data/Vaihingen
+  root_dir: data/Vaihingen_prepared_v4
   image_dir: images
   aux_dir: dsm
   mask_dir: masks

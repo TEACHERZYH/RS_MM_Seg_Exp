@@ -57,7 +57,7 @@ def main() -> None:
         dice_weight=config["loss"]["dice_weight"],
         feat_weight=config["loss"]["feat_weight"],
         pred_weight=config["loss"]["pred_weight"],
-    )
+    ).to(device)
 
     metrics = evaluate(model, loader, criterion, device, config["dataset"]["num_classes"])
     print("Evaluation metrics:")

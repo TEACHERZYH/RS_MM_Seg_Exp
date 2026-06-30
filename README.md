@@ -1,124 +1,130 @@
 # RS_MM_Seg_Exp
 
-面向论文《缺失与低质量模态场景下的轻量多模态遥感分割》的实验工程。
+Engineering repository for QALF, a quality-aware lightweight fusion framework for robust multimodal remote sensing semantic segmentation under missing and degraded modality conditions.
 
-## 当前目标
+The code supports the ISPRS Vaihingen and Potsdam optical/DSM segmentation setting used in the accompanying manuscript. It includes model definitions, data preparation utilities, robust training/evaluation protocols, ablation configurations, efficiency measurement, qualitative export, quality/gate diagnostics, degradation severity curves, and DSM misregistration stress testing.
 
-- 支持 `ISPRS Vaihingen` 和 `ISPRS Potsdam`
-- 支持 `RGB/IRRG + DSM` 双模态输入
-- 支持完整模态、缺失模态和退化模态实验协议
-- 提供可扩展的轻量多模态分割框架
+## Scope
 
-## 当前实现
+- Modalities: RGB/IRRG optical imagery plus DSM.
+- Datasets: ISPRS Vaihingen and ISPRS Potsdam after local dataset preparation.
+- Main model: `QALFNet` with modality-specific lightweight encoders, a modality-quality estimator, global quality priors, and local dynamic fusion gates.
+- Robustness protocols: full input, missing auxiliary DSM, degraded input, combined missing-DSM plus degraded input, missing-primary stress testing, and DSM misregistration stress testing.
+- This repository does not redistribute ISPRS data, prepared tiles, model checkpoints, trained weights, or large output folders.
 
-- 轻量 backbone：`MobileNetV3-Small` 风格编码器
-- 质量估计模块：`ModalityQualityEstimator`
-- 动态门控融合模块：`DynamicGatedFusion`
-- 主模型：`QALFNet`
-- 训练入口：`train.py`
-- 评估入口：`evaluate.py`
-
-## 目录结构
+## Directory Layout
 
 ```text
 RS_MM_Seg_Exp/
-  configs/
-    default.yaml
+  configs/                 Experiment configuration files
+  scripts/                 Data preparation, evaluation, diagnostics, and export scripts
   src/
-    datasets/
-      isprs_dataset.py
-    models/
-      qalf_net.py
-    engine.py
-    losses.py
-    utils.py
-  outputs/
-  train.py
-  evaluate.py
-  requirements.txt
+    datasets/              ISPRS dataset loader and modality-state handling
+    models/                QALF and baseline fusion models
+    engine.py              Training and evaluation loops
+    losses.py              Segmentation losses
+    utils.py               Runtime helpers
+  train.py                 Training entry point
+  evaluate.py              Single-checkpoint evaluation entry point
+  requirements.txt         Python dependencies
 ```
 
-## 数据组织建议
+Ignored local-only directories include `data/`, `data_raw/`, `outputs/`, Python caches, logs, checkpoints, and trained weights.
 
-```text
-data/
-  Vaihingen/
-    images/
-    dsm/
-    masks/
-    splits/
-      train.txt
-      val.txt
-      test.txt
-  Potsdam/
-    images/
-    dsm/
-    masks/
-    splits/
-      train.txt
-      val.txt
-      test.txt
-```
+## Environment
 
-其中：
-
-- `images/` 保存 RGB 或 IRRG 图像
-- `dsm/` 保存高度图
-- `masks/` 保存单通道语义标签图
-- `splits/*.txt` 每行一个样本 ID，不带扩展名
-
-## 运行流程
-
-### 1. 安装依赖
+Install dependencies in an isolated Python environment:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. 准备真实数据
+The verified remote experiments used a PyTorch environment with CUDA-capable GPUs. CPU execution is supported for small checks and selected fallback evaluations, but full model training should be run on GPU.
 
-#### Potsdam
+## Dataset Preparation
 
-```bash
-python scripts/prepare_isprs.py ^
-  --dataset potsdam ^
-  --raw-zip data_raw/Potsdam.zip ^
-  --output-root data/Potsdam_prepared
-```
-
-#### Vaihingen
+Obtain the ISPRS Vaihingen and Potsdam datasets from the official ISPRS benchmark source according to its access policy. Place archives under `data_raw/`, then prepare local tiles:
 
 ```bash
-python scripts/prepare_isprs.py ^
-  --dataset vaihingen ^
-  --raw-zip data_raw/Vaihingen.zip ^
-  --output-root data/Vaihingen_prepared
+python scripts/prepare_isprs.py --dataset potsdam --raw-zip data_raw/Potsdam.zip --output-root data/Potsdam_prepared
+python scripts/prepare_isprs.py --dataset vaihingen --raw-zip data_raw/Vaihingen.zip --output-root data/Vaihingen_prepared
 ```
 
-### 3. 训练
+For password-protected shared archives, `scripts/download_isprs_all.ps1` expects the password in an environment variable and does not contain credentials:
+
+```powershell
+$env:ISPRS_SHARE_PASSWORD = "<your password>"
+$env:PYTHON = "python"
+$env:PROJECT_DIR = "path/to/RS_MM_Seg_Exp"
+powershell -File scripts/download_isprs_all.ps1
+```
+
+## Training Examples
+
+Clean QALF runs:
 
 ```bash
-python train.py --config configs/default.yaml
+python train.py --config configs/vaihingen_irrg_dsm_mobilenetv3_clean_aug.yaml
+python train.py --config configs/potsdam_rgb_dsm_mobilenetv3_finetune_aug.yaml
 ```
 
-或使用正式实验配置：
+Robust QALF fine-tuning:
 
 ```bash
-python train.py --config configs/potsdam_rgb_dsm.yaml
-python train.py --config configs/vaihingen_irrg_dsm.yaml
+python train.py --config configs/vaihingen_irrg_dsm_mobilenetv3_robust_finetune.yaml
+python train.py --config configs/potsdam_rgb_dsm_mobilenetv3_robust_finetune.yaml
 ```
 
-### 4. 评估
+Robust fixed-late fusion controls:
 
 ```bash
-python evaluate.py --config configs/default.yaml --checkpoint outputs/best_model.pt
+python train.py --config configs/vaihingen_fixed_late_fusion_mobilenetv3_robust_finetune.yaml
+python train.py --config configs/potsdam_fixed_late_fusion_mobilenetv3_robust_finetune.yaml
 ```
 
-## 说明
+## Evaluation Examples
 
-- 当前版本先提供完整实验骨架，后续可继续补充：
-- 更强 backbone
-- 更细致的数据增强
-- 边界辅助分支
-- Optical-SAR 扩展协议
-- 更完整的日志和可视化输出
+Single-checkpoint evaluation:
+
+```bash
+python evaluate.py --config configs/vaihingen_irrg_dsm_mobilenetv3_robust_finetune.yaml --checkpoint outputs/qalf_vaihingen_irrg_dsm_mobilenetv3_robust_finetune/last_model.pt
+```
+
+Four-protocol evaluation:
+
+```bash
+python scripts/run_eval_protocol.py \
+  --config configs/vaihingen_irrg_dsm_mobilenetv3_robust_finetune.yaml \
+  --checkpoint outputs/qalf_vaihingen_irrg_dsm_mobilenetv3_robust_finetune/last_model.pt \
+  --split val_split \
+  --output-dir outputs/eval_protocol_vaihingen_qalf_robust
+```
+
+Efficiency measurement:
+
+```bash
+python scripts/measure_efficiency.py --config configs/vaihingen_irrg_dsm_mobilenetv3_robust_finetune.yaml
+```
+
+DSM misregistration stress:
+
+```bash
+python scripts/eval_misalignment_stress.py \
+  --config configs/vaihingen_irrg_dsm_mobilenetv3_robust_finetune.yaml \
+  --checkpoint outputs/qalf_vaihingen_irrg_dsm_mobilenetv3_robust_finetune/last_model.pt \
+  --split val_split \
+  --output-dir outputs/strengthening/misalignment/vaihingen_qalf_robust
+```
+
+Remote watcher scripts such as `run_misalignment_idle_watcher.sh` use configurable `PROJECT_DIR` and `PY` environment variables:
+
+```bash
+PROJECT_DIR=/path/to/RS_MM_Seg_Exp PY=/path/to/python bash scripts/run_misalignment_idle_watcher.sh
+```
+
+## Reproducibility Notes
+
+- The manuscript distinguishes validation results, clean tile-level hold-out results, and ISPRS official test-server results. The released code does not claim official test-server performance.
+- Missing primary optical inputs are implemented only as a stress check and remain outside the main robustness claim.
+- Teacher-student distillation is available as an optional ablation but is not the main contribution.
+- The main reported claim is bounded: robust training is the dominant empirical driver, while QALF provides reliability-aware fusion, availability-aware DSM suppression, and diagnostic fusion behavior.
