@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils.data import get_worker_info
 import yaml
 
 
@@ -14,11 +15,27 @@ def load_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def set_seed(seed: int) -> None:
+def set_seed(seed: int, deterministic: bool = False) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+    if deterministic:
+        torch.use_deterministic_algorithms(True)
+        if torch.backends.cudnn.is_available():
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.deterministic = True
+
+
+def seed_data_worker(worker_id: int) -> None:
+    info = get_worker_info()
+    if info is None:
+        return
+    worker_seed = int(info.seed % (2**32))
+    random.seed(worker_seed)
+    np.random.seed(worker_seed)
+    if hasattr(info.dataset, "set_worker_seed"):
+        info.dataset.set_worker_seed(worker_seed)
 
 
 def ensure_dir(path: str | Path) -> Path:

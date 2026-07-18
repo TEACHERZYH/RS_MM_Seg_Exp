@@ -4,6 +4,8 @@ data_raw/
 
 # Training outputs and checkpoints
 outputs/
+artifacts/
+*.log
 *.pt
 *.pth
 *.ckpt
