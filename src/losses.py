@@ -5,6 +5,27 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def deterministic_cross_entropy(
+    logits: torch.Tensor,
+    targets: torch.Tensor,
+    ignore_index: int = 255,
+    reduction: str = "mean",
+) -> torch.Tensor:
+    """Cross entropy expressed with deterministic CUDA primitives."""
+    if reduction not in {"none", "sum", "mean"}:
+        raise ValueError(f"Unsupported reduction: {reduction}")
+    valid = targets.ne(ignore_index)
+    safe_targets = targets.masked_fill(~valid, 0)
+    pixel_loss = -F.log_softmax(logits, dim=1).gather(1, safe_targets.unsqueeze(1)).squeeze(1)
+    pixel_loss = pixel_loss.masked_fill(~valid, 0.0)
+    if reduction == "none":
+        return pixel_loss
+    total = pixel_loss.sum()
+    if reduction == "sum":
+        return total
+    return total / valid.sum().clamp_min(1).to(dtype=total.dtype)
+
+
 def dice_loss(logits: torch.Tensor, targets: torch.Tensor, num_classes: int) -> torch.Tensor:
     probs = F.softmax(logits, dim=1)
     valid = (targets >= 0) & (targets < num_classes)
@@ -33,35 +54,37 @@ class SegmentationCriterion(nn.Module):
         self.dice_weight = dice_weight
         self.feat_weight = feat_weight
         self.pred_weight = pred_weight
-        self.ce = nn.CrossEntropyLoss(ignore_index=255)
-        self.kl = nn.KLDivLoss(reduction="batchmean")
+        self.ignore_index = 255
 
     def forward(
         self,
         student_out: dict,
         teacher_out: dict | None,
         targets: torch.Tensor,
+        distill_weight: float = 1.0,
     ) -> dict[str, torch.Tensor]:
         logits = student_out["logits"]
-        loss_ce = self.ce(logits, targets)
+        loss_ce = deterministic_cross_entropy(logits, targets, ignore_index=self.ignore_index)
         loss_dice = dice_loss(logits, targets, self.num_classes)
 
         loss_feat = torch.tensor(0.0, device=logits.device)
         loss_pred = torch.tensor(0.0, device=logits.device)
 
-        if teacher_out is not None:
+        if teacher_out is not None and distill_weight > 0.0:
             for s_feat, t_feat in zip(student_out["fused_features"], teacher_out["fused_features"]):
                 loss_feat = loss_feat + F.mse_loss(s_feat, t_feat.detach())
 
             t_prob = F.softmax(teacher_out["logits"].detach(), dim=1)
             s_log_prob = F.log_softmax(student_out["logits"], dim=1)
-            loss_pred = self.kl(s_log_prob, t_prob)
+            valid = ((targets >= 0) & (targets < self.num_classes)).float()
+            pixel_kl = F.kl_div(s_log_prob, t_prob, reduction="none").sum(dim=1)
+            loss_pred = (pixel_kl * valid).sum() / valid.sum().clamp_min(1.0)
 
         total = (
             self.ce_weight * loss_ce
             + self.dice_weight * loss_dice
-            + self.feat_weight * loss_feat
-            + self.pred_weight * loss_pred
+            + distill_weight * self.feat_weight * loss_feat
+            + distill_weight * self.pred_weight * loss_pred
         )
         return {
             "total": total,

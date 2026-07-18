@@ -1,8 +1,34 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+class SecondOrderHardsigmoid(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.clamp(x + 3.0, min=0.0, max=6.0) / 6.0
+
+
+class SecondOrderHardswish(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x * (torch.clamp(x + 3.0, min=0.0, max=6.0) / 6.0)
+
+
+def replace_hard_activations_for_second_order(module: nn.Module) -> int:
+    replacements = 0
+    for name, child in list(module.named_children()):
+        if isinstance(child, nn.Hardsigmoid):
+            setattr(module, name, SecondOrderHardsigmoid())
+            replacements += 1
+        elif isinstance(child, nn.Hardswish):
+            setattr(module, name, SecondOrderHardswish())
+            replacements += 1
+        else:
+            replacements += replace_hard_activations_for_second_order(child)
+    return replacements
 
 
 class ConvBNAct(nn.Module):
@@ -50,6 +76,7 @@ class TimmEncoder(BaseEncoder):
         in_channels: int,
         pretrained: bool,
         out_indices: tuple[int, ...] = (0, 1, 2, 3),
+        checkpoint_path: str | None = None,
     ) -> None:
         super().__init__()
         try:
@@ -59,11 +86,17 @@ class TimmEncoder(BaseEncoder):
 
         self.backbone = timm.create_model(
             model_name,
-            pretrained=pretrained,
+            pretrained=pretrained and checkpoint_path is None,
             in_chans=in_channels,
             features_only=True,
             out_indices=out_indices,
         )
+        if checkpoint_path is not None:
+            checkpoint = torch.load(Path(checkpoint_path), map_location="cpu", weights_only=True)
+            state_dict = checkpoint.get("state_dict", checkpoint) if isinstance(checkpoint, dict) else checkpoint
+            if not isinstance(state_dict, dict):
+                raise TypeError(f"Unsupported timm checkpoint payload: {checkpoint_path}")
+            self.backbone.load_state_dict(state_dict, strict=True)
         self._output_channels = list(self.backbone.feature_info.channels())
 
     def forward(self, x: torch.Tensor) -> list[torch.Tensor]:
@@ -145,7 +178,13 @@ class TorchvisionConvNeXtEncoder(BaseEncoder):
 
 
 class TorchvisionMobileNetV3Encoder(BaseEncoder):
-    def __init__(self, model_name: str, in_channels: int, pretrained: bool) -> None:
+    def __init__(
+        self,
+        model_name: str,
+        in_channels: int,
+        pretrained: bool,
+        checkpoint_path: str | None = None,
+    ) -> None:
         super().__init__()
         from torchvision.models import (
             MobileNet_V3_Large_Weights,
@@ -162,8 +201,27 @@ class TorchvisionMobileNetV3Encoder(BaseEncoder):
             raise ValueError(f"Unsupported torchvision MobileNetV3 model: {model_name}")
 
         build_fn, default_weights, output_indices, output_channels = factory[model_name]
+        if pretrained and checkpoint_path:
+            raise ValueError("Use either torchvision download-based pretrained weights or an explicit checkpoint, not both")
         weights = default_weights if pretrained else None
         backbone = build_fn(weights=weights)
+        if checkpoint_path:
+            checkpoint = Path(checkpoint_path)
+            if not checkpoint.is_file():
+                raise FileNotFoundError(checkpoint)
+            try:
+                state_dict = torch.load(checkpoint, map_location="cpu", weights_only=True)
+            except TypeError:
+                state_dict = torch.load(checkpoint, map_location="cpu")
+            if isinstance(state_dict, dict) and "state_dict" in state_dict:
+                state_dict = state_dict["state_dict"]
+            if not isinstance(state_dict, dict):
+                raise TypeError(f"Unsupported torchvision checkpoint payload: {checkpoint}")
+            state_dict = {
+                key.removeprefix("module."): value
+                for key, value in state_dict.items()
+            }
+            backbone.load_state_dict(state_dict, strict=True)
 
         stem_conv = backbone.features[0][0]
         if in_channels != stem_conv.in_channels:
@@ -181,7 +239,7 @@ class TorchvisionMobileNetV3Encoder(BaseEncoder):
                     new_conv.bias.copy_(stem_conv.bias)
             backbone.features[0][0] = new_conv
 
-        self.backbone = backbone.features
+        self.backbone = backbone.features[: max(output_indices) + 1]
         self._output_indices = output_indices
         self._output_channels = output_channels
 
@@ -292,14 +350,35 @@ class QALFNet(nn.Module):
         aux_encoder_pretrained: bool | None = None,
         freeze_main_encoder: bool = False,
         freeze_aux_encoder: bool = False,
+        fusion_mode: str = "dynamic_gated",
+        encoder_out_indices: tuple[int, ...] = (0, 1, 2, 3),
+        aux_encoder_out_indices: tuple[int, ...] | None = None,
+        encoder_checkpoint: str | None = None,
+        aux_encoder_checkpoint: str | None = None,
+        second_order_compatible_activations: bool = False,
     ) -> None:
         super().__init__()
+        supported_fusion_modes = {
+            "dynamic_gated",
+            "quality_weighted",
+            "fixed_average",
+            "availability_masked_average",
+            "main_only",
+            "aux_only",
+            "early_fusion",
+        }
+        if fusion_mode not in supported_fusion_modes:
+            raise ValueError(f"Unsupported fusion_mode: {fusion_mode}")
+        self.fusion_mode = fusion_mode
+
         self.main_encoder = self._build_encoder(
             encoder_type=encoder_type,
             in_channels=in_channels_main,
             base_channels=base_channels,
             model_name=encoder_name,
             pretrained=encoder_pretrained,
+            out_indices=tuple(encoder_out_indices),
+            checkpoint_path=encoder_checkpoint,
         )
         self.aux_encoder = self._build_encoder(
             encoder_type=encoder_type,
@@ -307,11 +386,18 @@ class QALFNet(nn.Module):
             base_channels=base_channels,
             model_name=aux_encoder_name or encoder_name,
             pretrained=encoder_pretrained if aux_encoder_pretrained is None else aux_encoder_pretrained,
+            out_indices=tuple(aux_encoder_out_indices or encoder_out_indices),
+            checkpoint_path=aux_encoder_checkpoint,
         )
         encoder_dims = self.main_encoder.output_channels()
         aux_dims = self.aux_encoder.output_channels()
         if encoder_dims != aux_dims:
             raise ValueError(f"Main/aux encoder feature dims must match, got {encoder_dims} vs {aux_dims}")
+
+        self.second_order_activation_replacements = 0
+        if second_order_compatible_activations:
+            self.second_order_activation_replacements += replace_hard_activations_for_second_order(self.main_encoder)
+            self.second_order_activation_replacements += replace_hard_activations_for_second_order(self.aux_encoder)
 
         self.quality_estimators_main = nn.ModuleList([ModalityQualityEstimator(ch) for ch in encoder_dims])
         self.quality_estimators_aux = nn.ModuleList([ModalityQualityEstimator(ch) for ch in encoder_dims])
@@ -325,6 +411,25 @@ class QALFNet(nn.Module):
         if freeze_aux_encoder:
             for param in self.aux_encoder.parameters():
                 param.requires_grad = False
+        if fusion_mode in {"main_only", "early_fusion"}:
+            for module in (self.aux_encoder, self.quality_estimators_main, self.quality_estimators_aux, self.fusions):
+                for param in module.parameters():
+                    param.requires_grad = False
+        if fusion_mode == "aux_only":
+            for module in (self.main_encoder, self.quality_estimators_main, self.quality_estimators_aux, self.fusions):
+                for param in module.parameters():
+                    param.requires_grad = False
+        if fusion_mode in {"fixed_average", "availability_masked_average"}:
+            for module in (self.quality_estimators_main, self.quality_estimators_aux):
+                for param in module.parameters():
+                    param.requires_grad = False
+            for fusion in self.fusions:
+                for param in fusion.gate_conv.parameters():
+                    param.requires_grad = False
+        if fusion_mode == "quality_weighted":
+            for fusion in self.fusions:
+                for param in fusion.gate_conv.parameters():
+                    param.requires_grad = False
 
     @staticmethod
     def _build_encoder(
@@ -333,15 +438,30 @@ class QALFNet(nn.Module):
         base_channels: int,
         model_name: str,
         pretrained: bool,
+        out_indices: tuple[int, ...],
+        checkpoint_path: str | None,
     ) -> BaseEncoder:
         if encoder_type == "lightweight":
             return LightweightEncoder(in_channels, base_channels)
         if encoder_type == "timm":
-            return TimmEncoder(model_name=model_name, in_channels=in_channels, pretrained=pretrained)
+            return TimmEncoder(
+                model_name=model_name,
+                in_channels=in_channels,
+                pretrained=pretrained,
+                out_indices=out_indices,
+                checkpoint_path=checkpoint_path,
+            )
         if encoder_type == "torchvision_convnext":
+            if checkpoint_path is not None:
+                raise ValueError("Explicit checkpoints are not implemented for torchvision ConvNeXt")
             return TorchvisionConvNeXtEncoder(model_name=model_name, in_channels=in_channels, pretrained=pretrained)
         if encoder_type == "torchvision_mobilenetv3":
-            return TorchvisionMobileNetV3Encoder(model_name=model_name, in_channels=in_channels, pretrained=pretrained)
+            return TorchvisionMobileNetV3Encoder(
+                model_name=model_name,
+                in_channels=in_channels,
+                pretrained=pretrained,
+                checkpoint_path=checkpoint_path,
+            )
         raise ValueError(f"Unsupported encoder_type: {encoder_type}")
 
     def forward(
@@ -349,7 +469,58 @@ class QALFNet(nn.Module):
         image: torch.Tensor,
         aux: torch.Tensor,
         aux_available: torch.Tensor | None = None,
+        main_available: torch.Tensor | None = None,
+        return_modality_features: bool = False,
     ) -> dict[str, torch.Tensor | list[torch.Tensor]]:
+        if self.fusion_mode == "early_fusion":
+            main_input = torch.cat([image, aux], dim=1)
+            main_feats = self.main_encoder(main_input)
+            logits = self.decoder([self.dropout(feat) for feat in main_feats])
+            logits = F.interpolate(logits, size=image.shape[-2:], mode="bilinear", align_corners=False)
+            outputs = {
+                "logits": logits,
+                "fused_features": main_feats,
+                "quality_main": [],
+                "quality_aux": [],
+                "gate_maps": [],
+            }
+            if return_modality_features:
+                outputs["main_features"] = main_feats
+                outputs["aux_features"] = []
+            return outputs
+
+        if self.fusion_mode == "main_only":
+            main_feats = self.main_encoder(image)
+            logits = self.decoder([self.dropout(feat) for feat in main_feats])
+            logits = F.interpolate(logits, size=image.shape[-2:], mode="bilinear", align_corners=False)
+            outputs = {
+                "logits": logits,
+                "fused_features": main_feats,
+                "quality_main": [],
+                "quality_aux": [],
+                "gate_maps": [],
+            }
+            if return_modality_features:
+                outputs["main_features"] = main_feats
+                outputs["aux_features"] = []
+            return outputs
+
+        if self.fusion_mode == "aux_only":
+            aux_feats = self.aux_encoder(aux)
+            logits = self.decoder([self.dropout(feat) for feat in aux_feats])
+            logits = F.interpolate(logits, size=image.shape[-2:], mode="bilinear", align_corners=False)
+            outputs = {
+                "logits": logits,
+                "fused_features": aux_feats,
+                "quality_main": [],
+                "quality_aux": [],
+                "gate_maps": [],
+            }
+            if return_modality_features:
+                outputs["main_features"] = []
+                outputs["aux_features"] = aux_feats
+            return outputs
+
         main_feats = self.main_encoder(image)
         aux_feats = self.aux_encoder(aux)
 
@@ -360,13 +531,60 @@ class QALFNet(nn.Module):
 
         if aux_available is None:
             aux_available = torch.ones(image.size(0), device=image.device)
-
-        main_available = torch.ones_like(aux_available)
+        if main_available is None:
+            main_available = torch.ones_like(aux_available)
+        availability_sum = main_available.to(dtype=torch.float32) + aux_available.to(dtype=torch.float32)
+        if bool(availability_sum.le(0).any().item()):
+            raise ValueError(f"{self.fusion_mode} requires at least one available modality per sample")
 
         for idx, (main_feat, aux_feat) in enumerate(zip(main_feats, aux_feats)):
+            if self.fusion_mode in {"fixed_average", "availability_masked_average"}:
+                main_proj = self.fusions[idx].main_proj(main_feat)
+                aux_proj = self.fusions[idx].aux_proj(aux_feat)
+                if self.fusion_mode == "fixed_average":
+                    fused_template = main_proj[:, :1]
+                    gate_main = torch.full_like(fused_template, 0.5)
+                    gate_aux = torch.full_like(fused_template, 0.5)
+                else:
+                    main_weight = main_available.to(dtype=main_proj.dtype).view(-1, 1, 1, 1)
+                    aux_weight = aux_available.to(dtype=aux_proj.dtype).view(-1, 1, 1, 1)
+                    denominator = main_weight + aux_weight
+                    if bool(denominator.le(0).any().item()):
+                        raise ValueError("availability_masked_average requires at least one available modality per sample")
+                    gate_main = main_weight / denominator
+                    gate_aux = aux_weight / denominator
+                fused = gate_main * main_proj + gate_aux * aux_proj
+                gates = torch.cat(
+                    [
+                        gate_main.expand(-1, 1, fused.shape[-2], fused.shape[-1]),
+                        gate_aux.expand(-1, 1, fused.shape[-2], fused.shape[-1]),
+                    ],
+                    dim=1,
+                )
+                fused_feats.append(self.dropout(fused))
+                gate_maps.append(gates)
+                continue
+
             q_main = self.quality_estimators_main[idx](main_feat, main_available)
             q_aux = self.quality_estimators_aux[idx](aux_feat, aux_available)
-            fused, gates = self.fusions[idx](main_feat, aux_feat, q_main, q_aux)
+            if self.fusion_mode == "quality_weighted":
+                main_proj = self.fusions[idx].main_proj(main_feat)
+                aux_proj = self.fusions[idx].aux_proj(aux_feat)
+                gate_main = q_main.view(-1, 1, 1, 1)
+                gate_aux = q_aux.view(-1, 1, 1, 1)
+                normalizer = gate_main + gate_aux + 1e-6
+                gate_main = gate_main / normalizer
+                gate_aux = gate_aux / normalizer
+                fused = gate_main * main_proj + gate_aux * aux_proj
+                gates = torch.cat(
+                    [
+                        gate_main.expand(-1, 1, fused.shape[-2], fused.shape[-1]),
+                        gate_aux.expand(-1, 1, fused.shape[-2], fused.shape[-1]),
+                    ],
+                    dim=1,
+                )
+            else:
+                fused, gates = self.fusions[idx](main_feat, aux_feat, q_main, q_aux)
 
             fused_feats.append(self.dropout(fused))
             quality_main_list.append(q_main)
@@ -376,10 +594,14 @@ class QALFNet(nn.Module):
         logits = self.decoder(fused_feats)
         logits = F.interpolate(logits, size=image.shape[-2:], mode="bilinear", align_corners=False)
 
-        return {
+        outputs = {
             "logits": logits,
             "fused_features": fused_feats,
             "quality_main": quality_main_list,
             "quality_aux": quality_aux_list,
             "gate_maps": gate_maps,
         }
+        if return_modality_features:
+            outputs["main_features"] = main_feats
+            outputs["aux_features"] = aux_feats
+        return outputs

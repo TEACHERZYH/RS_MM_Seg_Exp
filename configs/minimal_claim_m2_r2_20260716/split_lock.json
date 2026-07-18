@@ -1,0 +1,49 @@
+{
+  "schema": "qalf-minimal-split-lock-v2",
+  "campaign": "qalf_minimal_m2_20260715",
+  "selection_protocol": "qalf-confirmatory-v1",
+  "dry_run": false,
+  "datasets": {
+    "vaihingen": {
+      "data_root": "data/qalf_minimal_m2_20260715/Vaihingen_prepared_v4_confirmatory_v1",
+      "counts": {
+        "train": 808,
+        "validation": 40,
+        "internal_holdout": 112
+      },
+      "holdout_tiles": [
+        "32",
+        "37"
+      ],
+      "excluded_historical_tiles": [
+        "13"
+      ],
+      "split_sha256": {
+        "train": "2D4FE13357ECE45CC30F3A6E2A88E6C17AFC4C02BDF8209F8206B920276E1416",
+        "validation": "13FF7698FD3FA86CAB10D4E30425EA6601A523B238992E6D0A19926B82CC8AD2",
+        "internal_holdout": "DEC10BEC86734018E781761BA7FEB7ADDCA70960951195A00188E3C400A1CBC9"
+      }
+    },
+    "potsdam": {
+      "data_root": "data/qalf_minimal_m2_20260715/Potsdam_prepared_v4_confirmatory_v1",
+      "counts": {
+        "train": 10580,
+        "validation": 288,
+        "internal_holdout": 1058
+      },
+      "holdout_tiles": [
+        "3-11",
+        "6-8"
+      ],
+      "excluded_historical_tiles": [
+        "7-10",
+        "7-11"
+      ],
+      "split_sha256": {
+        "train": "326FB36BC03AF99F57218E0E90BCA51770869CBB0A467B4D6EA626D27B246D5C",
+        "validation": "BA34EB6F4E9F1E3F28B68078151CE5AEF498F7A04FC6E75F61251FD25B623A6C",
+        "internal_holdout": "5A79DF5071CF14CAA884AED10FFBB539898F6130B2E3C2355AC986F6BF4C5DB3"
+      }
+    }
+  }
+}
