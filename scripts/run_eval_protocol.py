@@ -335,6 +335,11 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(classwise_rows)
 
+    split_path = (
+        Path(config["dataset"]["root_dir"])
+        / config["dataset"]["split_dir"]
+        / config["dataset"][args.split]
+    ).resolve()
     metadata_path = output_dir / "eval_protocol_metadata.json"
     metadata = {
         "config": args.config,
@@ -342,6 +347,8 @@ def main() -> None:
         "checkpoint": args.checkpoint,
         "checkpoint_sha256": sha256_file(Path(args.checkpoint)),
         "split": args.split,
+        "split_path": str(split_path),
+        "split_sha256": sha256_file(split_path),
         "trials": args.trials,
         "single_clean_trial": bool(args.single_clean_trial),
         "scenarios": [scenario.name for scenario in scenarios],

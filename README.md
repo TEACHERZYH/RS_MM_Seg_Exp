@@ -69,30 +69,31 @@ python scripts/prepare_isprs_direct.py \
 python scripts/create_holdout_split_roots.py \
   --dataset vaihingen \
   --source-root data/Vaihingen_prepared_v4 \
-  --output-root data/qalf_minimal_m2_20260715/Vaihingen_prepared_v4_confirmatory_v1
+  --output-root data/qalf_repro_fair_20261102/Vaihingen_prepared_v4_confirmatory_v1
 
 python scripts/create_holdout_split_roots.py \
   --dataset potsdam \
   --source-root data/Potsdam_prepared_v4 \
-  --output-root data/qalf_minimal_m2_20260715/Potsdam_prepared_v4_confirmatory_v1
+  --output-root data/qalf_repro_fair_20261102/Potsdam_prepared_v4_confirmatory_v1
 ```
 
 正式划分记录位于：
 
 ```text
-configs/minimal_claim_m2_r2_20260716/split_lock.json
+configs/minimal_claim_m2_r2_20261102_fair/split_lock.json
 ```
 
 其中记录了训练、验证和 internal hold-out 的数量、留出图幅及 split SHA-256。生成后应核对脚本输出的数量和哈希；若本地数据根目录不同，只修改配置中的 `dataset.root_dir`，不要改变图幅划分、随机种子或训练预算后仍将结果视为精确复现。Windows 若无法创建目录符号链接，可启用开发者模式，或用等价目录链接/只读副本替代。
 
 ## 冻结实验矩阵
 
-论文主实验配置位于：
+新的公平复现矩阵位于：
 
 ```text
-configs/minimal_claim_m2_r2_20260716/
+configs/minimal_claim_m2_r2_20261102_fair/
   main/                         QALF 与 fixed-late 的三随机种子主矩阵
   control/                      main-only、availability-masked fixed 和 quality-only 控制
+  holdout_evaluation_manifest.csv 绑定 internal holdout/test_split 与 split SHA-256
   training_stage_manifest.csv   43 个训练阶段及配置哈希
   main_evaluation_manifest.csv
   control_evaluation_manifest.csv
@@ -100,7 +101,7 @@ configs/minimal_claim_m2_r2_20260716/
   split_lock.json
 ```
 
-主矩阵覆盖 Vaihingen、Potsdam，随机种子 `101/202/303`，以及 `base_clean`、`clean_continuation`、`robust` 三种训练阶段。配置中的 `resume` 路径固定了阶段依赖。
+主矩阵覆盖 Vaihingen、Potsdam，随机种子 `101/202/303`，以及 `base_clean`、`clean_continuation`、`robust` 三种训练阶段。Vaihingen 使用 `45+28+28` 个 epoch，Potsdam 使用 `35+13+13` 个 epoch。主 fixed-late 路由使用 `availability_masked_average`，缺失 DSM 时按可用性归一化；旧的 `minimal_claim_m2_r2_20260716` 矩阵保留为历史 fixed-average 版本，不用于新表格。
 
 ## 训练
 
@@ -108,20 +109,20 @@ configs/minimal_claim_m2_r2_20260716/
 
 ```bash
 python train.py --config \
-  configs/minimal_claim_m2_r2_20260716/main/m3-010_vaihingen_qalf_base_clean.yaml
+  configs/minimal_claim_m2_r2_20261102_fair/main/m3-010_vaihingen_qalf_base_clean.yaml
 
 python train.py --config \
-  configs/minimal_claim_m2_r2_20260716/main/m3-012_vaihingen_qalf_robust.yaml
+  configs/minimal_claim_m2_r2_20261102_fair/main/m3-012_vaihingen_qalf_robust.yaml
 ```
 
 强静态控制采用同等数据、种子和训练预算，例如：
 
 ```bash
 python train.py --config \
-  configs/minimal_claim_m2_r2_20260716/main/m3-001_vaihingen_fixed_late_base_clean.yaml
+  configs/minimal_claim_m2_r2_20261102_fair/main/m3-001_vaihingen_fixed_late_base_clean.yaml
 
 python train.py --config \
-  configs/minimal_claim_m2_r2_20260716/main/m3-003_vaihingen_fixed_late_robust.yaml
+  configs/minimal_claim_m2_r2_20261102_fair/main/m3-003_vaihingen_fixed_late_robust.yaml
 ```
 
 ## 评估
@@ -130,19 +131,51 @@ python train.py --config \
 
 ```bash
 python evaluate.py \
-  --config configs/minimal_claim_m2_r2_20260716/main/m3-012_vaihingen_qalf_robust.yaml \
-  --checkpoint outputs/qalf_minimal_m2_20260715/main/vaihingen/qalf/seed_101/robust/last_model.pt
+  --config configs/minimal_claim_m2_r2_20261102_fair/main/m3-012_vaihingen_qalf_robust.yaml \
+  --checkpoint outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/last_model.pt
 ```
 
 统一场景协议评估：
 
 ```bash
 python scripts/run_eval_protocol.py \
-  --config configs/minimal_claim_m2_r2_20260716/main/m3-012_vaihingen_qalf_robust.yaml \
-  --checkpoint outputs/qalf_minimal_m2_20260715/main/vaihingen/qalf/seed_101/robust/last_model.pt \
+  --config configs/minimal_claim_m2_r2_20261102_fair/main/m3-012_vaihingen_qalf_robust.yaml \
+  --checkpoint outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/last_model.pt \
   --split val_split \
-  --output-dir outputs/eval_protocol_vaihingen_qalf_robust
+  --output-dir outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/eval_val_split
 ```
+
+同一检查点的 internal holdout 评估使用配置中的 `holdout_split`，并在输出元数据中保存 split 文件哈希：
+
+```bash
+python scripts/run_eval_protocol.py \
+  --config configs/minimal_claim_m2_r2_20261102_fair/main/m3-012_vaihingen_qalf_robust.yaml \
+  --checkpoint outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/last_model.pt \
+  --split holdout_split \
+  --output-dir outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/eval_holdout_split
+```
+
+严重度扫描需显式冻结 M2 协议：
+
+```bash
+python scripts/eval_degradation_severity_curve.py \
+  --config configs/minimal_claim_m2_r2_20261102_fair/main/m3-012_vaihingen_qalf_robust.yaml \
+  --checkpoint outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/last_model.pt \
+  --split val_split \
+  --output-dir outputs/severity_m2_vaihingen_qalf_robust \
+  --protocol m2 --dataset-key vaihingen --include-combined
+```
+
+当前主矩阵汇总入口为：
+
+```bash
+python scripts/summarize_minimal_claim_results.py \
+  --manifest configs/minimal_claim_m2_r2_20261102_fair/main_evaluation_manifest.csv \
+  --output-dir outputs/qalf_repro_fair_20261102/statistics \
+  --allow-incomplete
+```
+
+`scripts/summarize_full_rebuild_results.py` 仅保留用于历史 `rebuild_20260714` 证据，不应再用于当前 24 条主评估记录。
 
 补充分析入口：
 
@@ -161,6 +194,8 @@ python scripts/export_comparative_qualitative.py --help
 python -m compileall -q src scripts train.py evaluate.py
 python scripts/create_dummy_isprs_data.py --help
 python scripts/test_result_aggregation_contracts.py
+python scripts/test_minimal_claim_repro_contracts.py
+python scripts/summarize_minimal_claim_results.py --help
 ```
 
 ## 复现边界

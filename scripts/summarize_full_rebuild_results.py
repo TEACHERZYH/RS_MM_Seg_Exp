@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Validate and summarize all manifest-backed QALF rebuild evaluations."""
+"""Legacy aggregator for the historical rebuild_20260714 schema.
+
+Use summarize_minimal_claim_results.py for the current 24-row QALF matrix.
+"""
 
 from __future__ import annotations
 
