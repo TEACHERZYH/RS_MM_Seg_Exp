@@ -122,9 +122,4 @@ Remote watcher scripts such as `run_misalignment_idle_watcher.sh` use configurab
 PROJECT_DIR=/path/to/RS_MM_Seg_Exp PY=/path/to/python bash scripts/run_misalignment_idle_watcher.sh
 ```
 
-## Reproducibility Notes
 
-- The manuscript distinguishes validation results, clean tile-level hold-out results, and ISPRS official test-server results. The released code does not claim official test-server performance.
-- Missing primary optical inputs are implemented only as a stress check and remain outside the main robustness claim.
-- Teacher-student distillation is available as an optional ablation but is not the main contribution.
-- The main reported claim is bounded: robust training is the dominant empirical driver, while QALF provides reliability-aware fusion, availability-aware DSM suppression, and diagnostic fusion behavior.
