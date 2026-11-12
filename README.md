@@ -116,10 +116,6 @@ python scripts/eval_misalignment_stress.py \
   --output-dir outputs/strengthening/misalignment/vaihingen_qalf_robust
 ```
 
-Remote watcher scripts such as `run_misalignment_idle_watcher.sh` use configurable `PROJECT_DIR` and `PY` environment variables:
 
-```bash
-PROJECT_DIR=/path/to/RS_MM_Seg_Exp PY=/path/to/python bash scripts/run_misalignment_idle_watcher.sh
-```
 
 
