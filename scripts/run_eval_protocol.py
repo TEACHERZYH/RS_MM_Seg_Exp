@@ -12,6 +12,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
+from reproduction_evidence import validate_checkpoint
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -58,6 +59,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--include-missing-primary", action="store_true")
     parser.add_argument("--corruption-manifest", type=str, default="")
     parser.add_argument("--single-clean-trial", action="store_true")
+    parser.add_argument("--expected-split-sha256", default="", help="Fail before model/data loading if split identity differs")
+    parser.add_argument("--require-training-complete", action="store_true")
     return parser.parse_args()
 
 
@@ -160,6 +163,16 @@ def sha256_file(path: Path) -> str:
 def main() -> None:
     args = parse_args()
     config = load_config(args.config)
+    if args.trials < 1:
+        raise ValueError("--trials must be positive")
+    split_path = (
+        Path(config["dataset"]["root_dir"])
+        / config["dataset"]["split_dir"]
+        / config["dataset"][args.split]
+    ).resolve()
+    split_sha256 = sha256_file(split_path)
+    if args.expected_split_sha256 and split_sha256 != args.expected_split_sha256.upper():
+        raise ValueError(f"Split hash mismatch: {split_path}")
     device = resolve_device(config["train"]["device"])
     num_classes = int(config["dataset"]["num_classes"])
     if num_classes != 6:
@@ -170,6 +183,9 @@ def main() -> None:
 
     model = QALFNet(**config["model"]).to(device)
     ckpt = load_checkpoint(args.checkpoint, map_location=device.type)
+    checkpoint_contract = {"status": "not_checked"}
+    if args.require_training_complete or config.get("experiment", {}).get("campaign") == "qalf_repro_fair_20261102":
+        checkpoint_contract = validate_checkpoint(ckpt, config, Path(args.checkpoint), sha256_file(Path(args.config)))
     model.load_state_dict(ckpt["model"])
     model.eval()
 
@@ -335,20 +351,16 @@ def main() -> None:
         writer.writeheader()
         writer.writerows(classwise_rows)
 
-    split_path = (
-        Path(config["dataset"]["root_dir"])
-        / config["dataset"]["split_dir"]
-        / config["dataset"][args.split]
-    ).resolve()
     metadata_path = output_dir / "eval_protocol_metadata.json"
     metadata = {
         "config": args.config,
         "config_sha256": sha256_file(Path(args.config)),
         "checkpoint": args.checkpoint,
         "checkpoint_sha256": sha256_file(Path(args.checkpoint)),
+        "checkpoint_contract": checkpoint_contract,
         "split": args.split,
         "split_path": str(split_path),
-        "split_sha256": sha256_file(split_path),
+        "split_sha256": split_sha256,
         "trials": args.trials,
         "single_clean_trial": bool(args.single_clean_trial),
         "scenarios": [scenario.name for scenario in scenarios],

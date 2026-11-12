@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import csv
+import json
 import tempfile
 from pathlib import Path
 
 import summarize_minimal_claim_results as agg
+from test_seed_statistics import make_evidence_fixture
 
 
 def read_rows(path: Path) -> list[dict[str, str]]:
@@ -64,6 +66,7 @@ def main() -> None:
         old_root = agg.ROOT
         agg.ROOT = root
         try:
+            identity, _ = make_evidence_fixture(result_dir)
             rows = [
                 {
                     "eval_id": "T-001",
@@ -76,6 +79,7 @@ def main() -> None:
                     "eval_split": "val_split",
                     "split_sha256": "ABC",
                     "result_dir": "result",
+                    **identity,
                 }
             ]
             output, complete = agg.collect(rows)

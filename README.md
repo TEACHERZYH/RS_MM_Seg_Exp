@@ -103,6 +103,16 @@ configs/minimal_claim_m2_r2_20261102_fair/
 
 主矩阵覆盖 Vaihingen、Potsdam，随机种子 `101/202/303`，以及 `base_clean`、`clean_continuation`、`robust` 三种训练阶段。Vaihingen 使用 `45+28+28` 个 epoch，Potsdam 使用 `35+13+13` 个 epoch。主 fixed-late 路由使用 `availability_masked_average`，缺失 DSM 时按可用性归一化；旧的 `minimal_claim_m2_r2_20260716` 矩阵保留为历史 fixed-average 版本，不用于新表格。
 
+两个 continuation 均从同一 base-clean 末轮分叉，分别作为等预算对照，不能按三个阶段连续训练。单条完整路径的预算为 Vaihingen `45+28`、Potsdam `35+13`。新矩阵尚无正式重跑结果，不能把历史表格归属于新配置。
+
+可先核对全部配置哈希、阶段依赖和 split 绑定，再导出命令清单：
+
+```bash
+python scripts/plan_reproduction.py --output outputs/reproduction_commands.json
+```
+
+此命令只生成清单，不执行训练或评估，也不读取影像和标签。清单中的 holdout 命令须在单独授权后运行。
+
 ## 训练
 
 以 Vaihingen、seed 101 的 QALF 为例，先训练 clean base，再执行 robust continuation：
@@ -142,6 +152,7 @@ python scripts/run_eval_protocol.py \
   --config configs/minimal_claim_m2_r2_20261102_fair/main/m3-012_vaihingen_qalf_robust.yaml \
   --checkpoint outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/last_model.pt \
   --split val_split \
+  --trials 3 --single-clean-trial \
   --output-dir outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/eval_val_split
 ```
 
@@ -152,6 +163,7 @@ python scripts/run_eval_protocol.py \
   --config configs/minimal_claim_m2_r2_20261102_fair/main/m3-012_vaihingen_qalf_robust.yaml \
   --checkpoint outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/last_model.pt \
   --split holdout_split \
+  --trials 3 --single-clean-trial \
   --output-dir outputs/qalf_repro_fair_20261102/main/vaihingen/qalf/seed_101/robust/eval_holdout_split
 ```
 
@@ -177,6 +189,12 @@ python scripts/summarize_minimal_claim_results.py \
 
 `scripts/summarize_full_rebuild_results.py` 仅保留用于历史 `rebuild_20260714` 证据，不应再用于当前 24 条主评估记录。
 
+新版汇总要求每个结果目录包含 `eval_protocol_metadata.json`，核对配置、检查点、split 和结果 CSV 的哈希；不符合身份绑定的结果列为无效，不混入统计。三种子汇总输出 `training_seed_summary.csv` 和 `paired_seed_contrasts.csv`，后者分别计算 robust 相对 clean-continuation、QALF 相对 fixed-late 的配对差值、95% Student-t 区间和正差种子数。零支持类别的 `not_estimable` 保持不可估计，不补零或静默换用其他指标。
+
+公平矩阵的评估还会强制核对检查点内嵌配置、末轮 epoch 和 `training_complete.json`，避免错误种子或旧权重换名后被接收。汇总同时核对结果 JSON、逐类 CSV、混淆矩阵 JSON 的哈希及真实 trial 数量；主评估 full/missing 各 1 次，degraded/combined 各 3 次。不同 split 哈希不能合并为配对统计。上述验证不代表正式实验已经完成。
+
+M2 的 blur 为平均池化核（非 Gaussian blur），noise/lowres/mask 严重度也独立冻结；论文中的 Gaussian blur 图文不能未经核对归属于 M2。默认 `legacy` 仅用于历史协议，正式扫描须明确写出 `--protocol`。
+
 补充分析入口：
 
 ```bash
@@ -195,6 +213,8 @@ python -m compileall -q src scripts train.py evaluate.py
 python scripts/create_dummy_isprs_data.py --help
 python scripts/test_result_aggregation_contracts.py
 python scripts/test_minimal_claim_repro_contracts.py
+python scripts/test_seed_statistics.py
+python scripts/test_reproduction_plan.py
 python scripts/summarize_minimal_claim_results.py --help
 ```
 

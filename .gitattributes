@@ -1,0 +1,2 @@
+# Preserve the byte identity of hash-bound reproduction configurations on Windows.
+configs/minimal_claim_m2_r2_20261102_fair/**/*.yaml text eol=lf
